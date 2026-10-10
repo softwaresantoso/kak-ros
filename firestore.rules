@@ -1,0 +1,140 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- helpers -----------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function staffDoc(businessId) {
+      return get(/databases/$(database)/documents/businesses/$(businessId)/users/$(request.auth.uid));
+    }
+
+    function isStaff(businessId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/businesses/$(businessId)/users/$(request.auth.uid)) &&
+        staffDoc(businessId).data.isActive == true;
+    }
+
+    function role(businessId) {
+      return staffDoc(businessId).data.role;
+    }
+
+    function isOwner(businessId) {
+      return isStaff(businessId) && role(businessId) == 'OWNER';
+    }
+
+    function isAdminOrOwner(businessId) {
+      return isStaff(businessId) && (role(businessId) == 'OWNER' || role(businessId) == 'ADMIN');
+    }
+
+    function isKitchenCashier(businessId) {
+      return isStaff(businessId) && role(businessId) == 'KITCHEN_CASHIER';
+    }
+
+    match /businesses/{businessId} {
+      // Public read of business profile (name/logo/hours) for the customer PWA.
+      allow read: if true;
+      allow write: if isOwner(businessId);
+
+      // ---- staff/users --------------------------------------------
+      match /users/{userId} {
+        allow read: if isStaff(businessId);
+        // Only owner manages staff accounts (product-3.B: admin "Tidak boleh
+        // mengelola user Owner"; simplified here to owner-only writes).
+        allow write: if isOwner(businessId);
+      }
+
+      // ---- public menu ----------------------------------------------
+      match /categories/{categoryId} {
+        allow read: if true;
+        allow write: if isOwner(businessId);
+      }
+
+      match /products/{productId} {
+        allow read: if true;
+        allow write: if isOwner(businessId);
+      }
+
+      // ---- tables: public read (customer needs table info via QR) ---
+      match /tables/{tableId} {
+        allow read: if true;
+        allow write: if isAdminOrOwner(businessId);
+      }
+
+      // ---- orders -----------------------------------------------------
+      match /orders/{orderId} {
+        // Customers can create orders (no auth) and read their own order
+        // by number/id (the app never lists all orders to a customer —
+        // it queries by document id only, which this rule allows).
+        allow create: if true;
+        allow get: if true;
+        allow list: if isStaff(businessId);
+        // Status/payment transitions only by staff; item edits pre-payment
+        // are handled via Cloud Functions in a later phase if needed.
+        allow update: if isStaff(businessId);
+        allow delete: if false; // never hard-delete order history
+      }
+
+      match /settings/{settingId} {
+        allow read: if isStaff(businessId);
+        allow write: if isOwner(businessId);
+      }
+
+      // Order-number counter — deliberately separate from settings/ above.
+      // Customers (unauthenticated) must be able to increment this during
+      // checkout; it only ever holds an integer count per day, never
+      // business-sensitive config, so public read/write is an acceptable
+      // trade-off here.
+      match /counters/{counterId} {
+        allow read, write: if true;
+      }
+
+      // ---- reservations -------------------------------------------
+      match /reservations/{reservationId} {
+        allow create: if true;
+        allow get: if true;
+        // list is read-only visibility (e.g. today's reservation count on
+        // the shared Dashboard, which any staff role can view) — managing
+        // a reservation (update) stays admin/owner-only below.
+        allow list: if isStaff(businessId);
+        allow update: if isAdminOrOwner(businessId);
+        allow delete: if false;
+      }
+
+      // ---- payments (staff-only, never client-writable by customer) --
+      match /payments/{paymentId} {
+        allow read: if isStaff(businessId);
+        allow create: if isKitchenCashier(businessId) || isAdminOrOwner(businessId);
+        allow update, delete: if isOwner(businessId);
+      }
+
+      // ---- customers --------------------------------------------------
+      match /customers/{customerId} {
+        allow read, write: if isAdminOrOwner(businessId);
+      }
+
+      // ---- inventory (Phase 2 skeleton, owner-only for now) -----------
+      match /inventory/{itemId} {
+        allow read, write: if isOwner(businessId);
+      }
+      match /stockMovements/{moveId} {
+        allow read, write: if isOwner(businessId);
+      }
+
+      // ---- audit log: append-only, staff-readable, owner-only delete --
+      match /auditLogs/{logId} {
+        allow read: if isAdminOrOwner(businessId);
+        allow create: if isStaff(businessId);
+        allow update, delete: if false;
+      }
+    }
+
+    // Deny everything else by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,22 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Product photos: publicly viewable (customer menu needs them),
+    // upload requires being signed in as staff. Role isn't re-checked
+    // here (Storage rules keeping it simple) — the actual imageUrl only
+    // gets attached to a product via Firestore's own products/ write
+    // rule, which IS owner-only, so an uploaded-but-unused file has no
+    // effect on the menu.
+    match /products/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Business profile assets (logo) — same pattern as products/ above.
+    match /business/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+  }
+}

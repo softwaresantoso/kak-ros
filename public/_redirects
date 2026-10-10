@@ -1,0 +1,5 @@
+# Cloudflare Pages redirect rule for SPA routing — without this, refreshing
+# on a route like /order/menu or /app/dashboard returns a raw 404 instead of
+# letting React Router handle it client-side. Equivalent to the redirect in
+# netlify.toml (kept in the repo, harmless — Cloudflare Pages just ignores it).
+/*  /index.html  200
