@@ -22,7 +22,7 @@ kakros.id (root, tanpa subdomain)  →  marketing site + signup + "cari resto sa
 
 - `TenantContext` baru: baca `window.location.hostname` saat app start, ekstrak subdomain, simpan sebagai `tenantId` yang dipakai SEMUA service (ganti `BUSINESS_ID` dari env var statis)
 - Dev lokal: dukung override lewat `?tenant=restoran-a` di URL, atau subdomain `.localhost` (browser modern + Vite dev server sudah mendukung ini secara native)
-- DNS: wildcard `*.kakros.id` → Cloudflare Pages (satu deployment melayani semua subdomain)
+- DNS/hosting: **LIHAT §13 — koreksi penting.** Rencana awal "wildcard `*.kakros.id` → Cloudflare Pages" ternyata tidak bisa: Pages tidak mendukung wildcard custom domain.
 - Root domain (`kakros.id` tanpa subdomain) dirender sebagai halaman BERBEDA — bukan tenant manapun, isinya landing page produk + form signup
 
 ## 3. Model Akun Staff Lintas-Tenant
@@ -69,7 +69,7 @@ Project ini **di-fork** dari `mas-ndomien-pos` (bukan dari nol) — 90% kode (se
 | 1 | Scaffold project + rebranding (logo, warna, nama) — **selesai** |
 | 2 | `TenantContext` + ganti semua service dari `BUSINESS_ID` statis ke dinamis — **selesai** (lihat §10) |
 | 3 | Landing page marketing + form signup self-service |
-| 4 | Deploy infra: domain `kakros.id`, wildcard DNS, 1 Firebase project baru |
+| 4 | Firebase project baru (bisa dikerjakan lebih dulu) + hosting & domain (lihat §13 — butuh domain sendiri & hosting yang mendukung wildcard) |
 | 5 | Migrasi data Mas Ndomien jadi tenant beta pertama, testing isolasi antar-tenant |
 | 6 | Super-admin panel dasar |
 | 7 | QA khusus multi-tenant (yang paling kritis: pastikan Tenant A benar-benar TIDAK BISA lihat data Tenant B sama sekali) |
@@ -127,3 +127,35 @@ Project ini **di-fork** dari `mas-ndomien-pos` (bukan dari nol) — 90% kode (se
 4. `…/order?tenant=nama-ngawur` → "Restoran tidak ditemukan".
 5. `…/?tenant=root` → halaman root; ketik `kak-ros-test` → Buka.
 6. **Uji isolasi:** `?tenant=mas-ndomien` → `/login` pakai akun Owner Mas Ndomien → masuk dashboard. Lalu `?tenant=kak-ros-test` → buka `/login`: harus muncul "Akun tidak terdaftar di restoran ini" (bukan dashboard, bukan macet).
+
+
+---
+
+## 13. Koreksi: Hosting & Domain untuk Subdomain Per-Tenant
+
+**Koreksi atas klaim sebelumnya.** §2 versi awal menyatakan wildcard `*.kakros.id` bisa diarahkan ke satu project Cloudflare Pages. Setelah dicek ke dokumentasi Cloudflare: **Pages tidak mendukung wildcard custom domain.** Dan `kakros.pages.dev` sendiri juga tidak bisa dipakai untuk tenant: alamat `*.pages.dev` hanya ada satu per project (`kakros.pages.dev`), sedangkan `xxx.kakros.pages.dev` hanya dipakai Cloudflare untuk preview deployment, bukan subdomain bebas.
+
+**Akibatnya:** selama hanya ada `kakros.pages.dev`, model "satu restoran = satu subdomain" belum bisa berjalan di produksi. Untuk pengembangan lokal tidak masalah (`?tenant=` dan `slug.localhost` tetap bekerja), jadi Fase 3 tidak terblokir.
+
+### Pilihan untuk produksi (diputuskan di Fase 4)
+
+| Opsi | Cara kerja | Catatan |
+|---|---|---|
+| A. Domain sendiri + Cloudflare **Workers** (static assets) | Domain dikelola di Cloudflare DNS; Worker dipasang di route wildcard `*.domainanda/*` dan menyajikan hasil build `dist/` (mode SPA) | Paling cocok dengan keputusan subdomain. Perlu beli domain dan memindah deploy dari Pages ke Workers. **Detail teknis (route wildcard, SSL wildcard tingkat satu, mode SPA) harus diverifikasi di awal Fase 4 sebelum dipakai.** |
+| B. Domain sendiri + tiap tenant didaftarkan sebagai custom domain Pages (otomatis via Cloudflare API saat signup) | `restoran-a.domainanda` ditambahkan satu per satu ke project Pages | Tetap di Pages, tapi butuh integrasi API dan ada batas jumlah custom domain per project (cek batas terkini sebelum memilih) |
+| C. Tenant lewat path (`kakros.pages.dev/t/restoran-a/...`) | Tanpa domain sendiri | Paling murah, tapi merusak PWA: manifest statis memakai `start_url: /order` yang tidak membawa info tenant, jadi aplikasi yang di-install akan kehilangan tenant-nya. Perlu manifest dinamis per tenant. Tidak disarankan. |
+
+**Rekomendasi:** Opsi A, dengan domain sendiri. Apa pun pilihannya, **domain milik sendiri diperlukan** untuk produk yang menjual alamat per restoran. `kakros.pages.dev` cocok hanya sebagai alamat staging/halaman platform.
+
+Kode saat ini (`tenant.js`) membaca subdomain dari hostname, jadi pilihan A atau B tidak mengubah kode aplikasi, hanya cara penyajiannya.
+
+## 14. Firebase Project Baru (Fase 4 bagian awal)
+
+Dipisah dari project Mas Ndomien supaya perubahan Security Rules (termasuk rules signup di Fase 3) tidak menyentuh resto yang sedang live.
+
+- Satu project untuk SEMUA tenant Kak ROS.
+- Lokasi Firestore bersifat permanen setelah dibuat; untuk pengguna di Indonesia pilih `asia-southeast2` (Jakarta).
+- Authentication: aktifkan Email/Password.
+- Storage (logo/foto produk) butuh paket **Blaze** sejak Feb 2026. Aktifkan kalau fitur upload sudah akan dipakai, dan pasang budget alert.
+- `firebase.json` sudah disediakan (menunjuk `firestore.rules`, `firestore.indexes.json`, `storage.rules`); deploy cukup `firebase deploy --only firestore`.
+- `firestore.indexes.json` sekarang memuat semua index gabungan yang dibutuhkan, termasuk `reservations (date desc, time asc)` yang sebelumnya tidak ada di file.
